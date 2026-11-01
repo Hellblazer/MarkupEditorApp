@@ -300,6 +300,7 @@ export function suggestionsPlugin() {
       decorations(state) {
         return suggestionDecorations(state)
       },
+      handleKeyDown: handleSuggestionKey,
     },
   })
 }
@@ -448,6 +449,38 @@ export function goToSuggestion(view, direction) {
   return { found: true, id: target.id, block: target.block }
 }
 
+/**
+ * The pending suggestion whose range the selection covers exactly, which is where `goToSuggestion` leaves it.
+ * Null for a caret and for any other selection.
+ *
+ * @param {object} state - EditorState
+ * @returns {object|null} a pending suggestion
+ */
+export function selectedSuggestion(state) {
+  const { from, to, empty } = state.selection
+  if (empty) return null
+  return getSuggestions(state).pending.find(s => s.from === from && s.to === to) ?? null
+}
+
+/**
+ * Return accepts the selected suggestion and Shift-Return rejects it; any other key, a modified Return, or a
+ * selection that is not exactly one suggestion is left to the editor. Search mode also takes Return and
+ * Shift-Return and is marked by the `searching` class on the editor element, so it keeps them.
+ *
+ * @param {object} view - EditorView
+ * @param {KeyboardEvent} event
+ * @returns {boolean} true when the key was handled
+ */
+export function handleSuggestionKey(view, event) {
+  if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey) return false
+  if (view.dom.classList.contains('searching')) return false
+  const selected = selectedSuggestion(view.state)
+  if (!selected) return false
+  const act = event.shiftKey ? rejectSuggestions : acceptSuggestions
+  act(view, [selected.id])
+  return true
+}
+
 // ---------------------------------------------------------------------------
 // Decorations and widgets
 // ---------------------------------------------------------------------------
@@ -522,13 +555,14 @@ const MAX_EDITS = 200
 
 /**
  * Add the suggestions plugin to `view` if it does not have it. Safe to call repeatedly. Reconfiguring keeps the
- * state of the plugins already there, history included.
+ * state of the plugins already there, history included. The plugin goes first, because the keymap that is
+ * already there handles Return before a plugin that follows it is asked.
  *
  * @param {object} view - EditorView
  */
 export function ensureInstalled(view) {
   if (suggestionsKey.get(view.state)) return
-  view.updateState(view.state.reconfigure({ plugins: [...view.state.plugins, suggestionsPlugin()] }))
+  view.updateState(view.state.reconfigure({ plugins: [suggestionsPlugin(), ...view.state.plugins] }))
 }
 
 /**

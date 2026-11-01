@@ -38,8 +38,13 @@ final class AppControl {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey)
             reconcile()
+            if isEnabled { Task { await refreshPendingSuggestions() } } else { pendingSuggestions = 0 }
         }
     }
+
+    /// How many suggestions are pending in the selected editor. Menu validation is synchronous and cannot ask the
+    /// editor, so the Edit > Suggestions commands read this.
+    private(set) var pendingSuggestions = 0
 
     /// Whether images an assistant adds must have a relative path; any other source is turned into a link.
     var restrictImages: Bool {
@@ -70,6 +75,42 @@ final class AppControl {
         isEnabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? Self.enabledByDefault
         restrictImages = UserDefaults.standard.object(forKey: Self.restrictImagesKey) as? Bool ?? true
         approvals = store.approvals()
+    }
+
+    /// The number of pending suggestions in `view`, zero when there is no editor or it cannot say.
+    static func pendingSuggestionCount(in view: MarkupWKWebView?) async -> Int {
+        guard let view, let list = try? await view.listSuggestions(), list.ok else { return 0 }
+        return list.suggestions.filter { $0.status == "pending" }.count
+    }
+
+    /// Re-reads `pendingSuggestions` from the selected editor. With `ifPending`, does nothing when none are pending:
+    /// only a proposal, which always refreshes, can add one.
+    func refreshPendingSuggestions(ifPending: Bool = false, in view: MarkupWKWebView? = nil) async {
+        guard isEnabled else { pendingSuggestions = 0; return }
+        if ifPending && pendingSuggestions == 0 { return }
+        pendingSuggestions = await Self.pendingSuggestionCount(in: view ?? MarkupEditor.selectedWebView)
+    }
+
+    /// What to tell the user before the source view replaces the editor, or nil when no suggestion would be lost.
+    static func sourceSwitchWarning(pending: Int) -> (message: String, detail: String)? {
+        guard pending > 0 else { return nil }
+        let count = pending == 1 ? "1 pending suggestion" : "\(pending) pending suggestions"
+        return ("Switch to the source view?", "\(count) from an assistant will be discarded. The source view cannot show suggestions, and they are not restored when you return to the document.")
+    }
+
+    /// The alert to show before the source view replaces the editor, with Cancel as the default button, or nil
+    /// when no suggestion would be lost.
+    static func sourceSwitchAlert(pending: Int) -> NSAlert? {
+        guard let warning = sourceSwitchWarning(pending: pending) else { return nil }
+        let alert = NSAlert()
+        alert.messageText = warning.message
+        alert.informativeText = warning.detail
+        alert.alertStyle = .warning
+        let cancel = alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Switch")
+        // A button titled Cancel is given Escape and no default; Return makes it the default button.
+        cancel.keyEquivalent = "\r"
+        return alert
     }
 
     /// The path of the bundled command line tool, which is also the only program allowed to connect.

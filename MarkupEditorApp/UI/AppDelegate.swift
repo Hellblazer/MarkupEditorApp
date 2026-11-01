@@ -13,6 +13,15 @@ import SwiftUI
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     var keymap: KeymapConfig?
+    /// Whether assistants are on, whether the source view is showing, and how many suggestions are pending in
+    /// the selected editor. A property so tests can supply them.
+    var suggestionsState: () -> (enabled: Bool, sourceShowing: Bool, pending: Int) = {
+        (enabled: AppControl.shared.isEnabled, sourceShowing: AppControl.shared.sourceShowing, pending: AppControl.shared.pendingSuggestions)
+    }
+    /// The JavaScript of the Edit > Suggestions commands.
+    private static let suggestionCommands: Set<String> = [
+        "MU.nextSuggestion()", "MU.previousSuggestion()", "MU.acceptAllSuggestions()", "MU.rejectAllSuggestions()",
+    ]
     private var openRecentMenu = NSMenu(title: "Open Recent")
     /// Direct accessor for the running AppDelegate instance, set in applicationWillFinishLaunching.
     /// `NSApplication.shared.delegate as? AppDelegate` is the more usual way to reach it, and works
@@ -348,6 +357,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         findItem.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Find")
         editMenu.addItem(findItem)
         editMenu.addItem(buildSuggestionsSubmenuItem())
+        editMenu.delegate = self
         editMenuItem.submenu = editMenu
 
         // Format menu driven by app's toolbarconfig.json
@@ -514,6 +524,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if let textView = focusedTextView { return textView.undoManager?.canRedo ?? false }
             return MarkupEditor.selectedWebView?.validateMenuItem(NSMenuItem(title: "", action: #selector(MarkupWKWebView.redoFromMenu(_:)), keyEquivalent: "")) ?? false
         default:
+            if menuItem.action == #selector(executeMenuJS(_:)), let js = menuItem.representedObject as? String, Self.suggestionCommands.contains(js) {
+                let state = suggestionsState()
+                return state.enabled && !state.sourceShowing && state.pending > 0
+            }
             return true
         }
     }
@@ -524,7 +538,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Menu items store their JS command string in representedObject.
     @objc private func executeMenuJS(_ sender: NSMenuItem) {
         guard let js = sender.representedObject as? String else { return }
-        MarkupEditor.selectedWebView?.executeJavaScript(js)
+        MarkupEditor.selectedWebView?.executeJavaScript(js) { _, _ in
+            Task { await AppControl.shared.refreshPendingSuggestions(ifPending: true) }
+        }
     }
 
     /// Create an NSMenuItem whose action calls executeJavaScript with the given JS command.
@@ -552,8 +568,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Edit > Suggestions: step through, or settle all at once, the proposals an assistant made.
-    /// Always enabled: validateMenuItem is synchronous and cannot ask the web view whether any are
-    /// pending, and with none pending the MU functions answer found:false and nothing happens.
+    /// The item is hidden while assistants are off, and its commands are enabled only while some
+    /// suggestion is pending and the editor, not the source view, is showing (see `suggestionsState`).
     /// Next and Previous take Cmd-' and Cmd-Shift-' (Xcode's next/previous issue chords); none of
     /// the menu, keymapconfig.json or the editor's own keymap uses them. Accept All and Reject All
     /// change text, so they carry no shortcut. AppKit matches a key equivalent against the key's
@@ -749,6 +765,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
 extension AppDelegate: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.title == "Edit" {
+            menu.items.first { $0.title == "Suggestions" }?.isHidden = !suggestionsState().enabled
+            return
+        }
         guard menu === openRecentMenu else { return }
         menu.removeAllItems()
         let urls = NSDocumentController.shared.recentDocumentURLs

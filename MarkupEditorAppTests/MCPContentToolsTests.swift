@@ -636,7 +636,9 @@ struct MCPContentToolsTests {
         let proposed = try await fixture.harness.call("propose_edits", try await proposals(fixture, [(1, "cat", "dog"), (1, "mat", "rug")]))
         #expect(proposed.json?["results"]?[0]?["status"] == "proposed" && proposed.json?["results"]?[1]?["status"] == "proposed", Comment(rawValue: proposed.text))
 
-        let menu = AppDelegate().buildMenu()
+        let delegate = AppDelegate()
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2) }
+        let menu = delegate.buildMenu()
         let next = try Self.apostrophe(.command)
         let previous = try Self.apostrophe([.command, .shift])
 

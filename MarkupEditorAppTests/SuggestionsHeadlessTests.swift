@@ -241,4 +241,87 @@ struct SuggestionsHeadlessTests {
         #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The cat"))
         #expect(try await webView.listSuggestions().suggestions.map(\.status) == ["accepted"])
     }
+
+    // MARK: Pending count for the Suggestions menu
+
+    @Test func theAppCountsOnlyPendingSuggestions() async throws {
+        let (_, webView) = try await Self.loaded()
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 0)
+        _ = try await webView.proposeEdits([
+            try await Self.edit(webView, 1, "cat", "dog"),
+            try await Self.edit(webView, 1, "mat", ""),
+        ])
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 2)
+        try await Self.userRuns(webView, "MU.rejectAllSuggestions()")
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 0, "rejected suggestions are not pending")
+    }
+
+    @Test func aStaleSuggestionIsNotCountedAsPending() async throws {
+        let (_, webView) = try await Self.loaded()
+        _ = try await webView.proposeEdits([try await Self.edit(webView, 1, "cat", "fox")])
+        await withCheckedContinuation { continuation in webView.setHtml("<p>A different document.</p>") { continuation.resume() } }
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 0)
+    }
+
+    @Test func noEditorHasNoPendingSuggestions() async {
+        #expect(await AppControl.pendingSuggestionCount(in: nil) == 0)
+    }
+
+    @Test func theSourceSwitchWarnsOnlyWhenSuggestionsArePending() throws {
+        #expect(AppControl.sourceSwitchWarning(pending: 0) == nil)
+        let one = try #require(AppControl.sourceSwitchWarning(pending: 1))
+        #expect(one.detail.contains("1 pending suggestion "), Comment(rawValue: one.detail))
+        let three = try #require(AppControl.sourceSwitchWarning(pending: 3))
+        #expect(three.detail.contains("3 pending suggestions"), Comment(rawValue: three.detail))
+    }
+
+    @Test func theSourceSwitchAlertDefaultsToCancel() throws {
+        #expect(AppControl.sourceSwitchAlert(pending: 0) == nil)
+        let alert = try #require(AppControl.sourceSwitchAlert(pending: 2))
+        alert.layout()
+        #expect(alert.buttons.map(\.title) == ["Cancel", "Switch"])
+        #expect(alert.window.defaultButtonCell?.title == "Cancel", "a first button titled Cancel is not the default unless Return is assigned to it")
+    }
+
+    // MARK: Return and Shift-Return
+
+    /// Presses Return, with Shift when `shift`, in the editor as the user would, through the editor's real key handling.
+    private static func userPressesReturn(_ webView: MarkupWKWebView, shift: Bool = false) async throws {
+        _ = try await webView.evaluateJavaScript("""
+            (() => {
+              const view = document.getElementById('markupeditor').MU.activeView()
+              view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, shiftKey: \(shift), bubbles: true, cancelable: true }))
+            })()
+            """)
+    }
+
+    @Test func returnAcceptsAndShiftReturnRejectsTheSelectedSuggestionAheadOfTheEditorsOwnKeys() async throws {
+        let (_, webView) = try await Self.loaded()
+        _ = try await webView.proposeEdits([
+            try await Self.edit(webView, 1, "cat", "dog"),
+            try await Self.edit(webView, 1, "mat", "rug"),
+        ])
+        let blocksBefore = try await Self.blocks(webView).count
+
+        try await Self.userRuns(webView, "MU.nextSuggestion()")
+        try await Self.userPressesReturn(webView)
+        #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The dog sat on the mat"))
+        #expect(try await Self.blocks(webView).count == blocksBefore, "Return did not split the paragraph")
+
+        try await Self.userRuns(webView, "MU.nextSuggestion()")
+        try await Self.userPressesReturn(webView, shift: true)
+        #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The dog sat on the mat"), "rejecting leaves the text")
+        let statuses = try await webView.listSuggestions().suggestions.map(\.status)
+        #expect(statuses.sorted() == ["accepted", "rejected"], Comment(rawValue: statuses.joined(separator: ",")))
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 0)
+    }
+
+    @Test func returnWithNoSuggestionSelectedStillSplitsTheParagraph() async throws {
+        let (_, webView) = try await Self.loaded()
+        _ = try await webView.proposeEdits([try await Self.edit(webView, 1, "cat", "dog")])
+        let before = try await Self.blocks(webView).count
+        try await Self.userPressesReturn(webView)
+        #expect(try await Self.blocks(webView).count == before + 1, "the caret is not on the suggestion, so Return is the editor's")
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 1)
+    }
 }

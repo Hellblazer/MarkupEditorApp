@@ -162,6 +162,7 @@ struct AppControlFacade: ControlFacade {
         }
         // A refusal of one edit is part of the reply; a refusal of the whole call is an error.
         if !result.ok { throw ControlError(result.reason ?? "propose_edits was refused") }
+        await control.refreshPendingSuggestions()
         return result
     }
 

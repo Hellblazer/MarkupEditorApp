@@ -179,4 +179,43 @@ import Foundation
             }
         }
     }
+
+    private func editMenu(of delegate: AppDelegate) throws -> NSMenu {
+        try #require(delegate.buildMenu().items.compactMap(\.submenu).first { $0.title == "Edit" })
+    }
+
+    @Test func testTheSuggestionsItemIsHiddenUnlessAssistantsAreEnabled() throws {
+        let delegate = AppDelegate()
+        let edit = try editMenu(of: delegate)
+        let item = try #require(edit.items.first { $0.title == "Suggestions" })
+        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 3) }
+        delegate.menuNeedsUpdate(edit)
+        #expect(item.isHidden, "assistants off: nothing can propose, so the item is not offered")
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 0) }
+        delegate.menuNeedsUpdate(edit)
+        #expect(!item.isHidden)
+    }
+
+    @Test func testTheSuggestionCommandsAreEnabledOnlyWhileSomethingIsPending() throws {
+        let delegate = AppDelegate()
+        let submenu = try #require(suggestionsSubmenu(of: delegate))
+        let commands = submenu.items.filter { !$0.isSeparatorItem }
+        try #require(commands.count == 4)
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 0) }
+        for item in commands { #expect(!delegate.validateMenuItem(item), "\(item.title) with none pending") }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2) }
+        for item in commands { #expect(delegate.validateMenuItem(item), "\(item.title) with two pending") }
+        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 2) }
+        for item in commands { #expect(!delegate.validateMenuItem(item), "\(item.title) with assistants off") }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: true, pending: 2) }
+        for item in commands { #expect(!delegate.validateMenuItem(item), "\(item.title) while the source view is showing") }
+    }
+
+    @Test func testOtherEditorCommandsAreNotAffectedByTheSuggestionState() throws {
+        let delegate = AppDelegate()
+        let edit = try editMenu(of: delegate)
+        let find = try #require(edit.items.first { $0.title == "Find" })
+        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 0) }
+        #expect(delegate.validateMenuItem(find))
+    }
 }

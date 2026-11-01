@@ -447,6 +447,7 @@ struct MarkupDocumentView: View {
     /// restore entirely for HTML documents rather than risk that.
     private func handleToggleSource() async {
         if !sourceShowing {
+            guard await confirmDiscardingSuggestions() else { return }
             // Document -> Source. Capture the ProseMirror selection's top-level block
             // index BEFORE setDocumentSourceFromView() -- the webView's live doc is still
             // the one the selection was captured against. Convert to a UTF-16 offset
@@ -561,6 +562,14 @@ struct MarkupDocumentView: View {
         markupImageToAdd(selectedWebView, url: url)
     }
     
+    /// Asks before the source view replaces an editor that holds pending suggestions, since the editor created when
+    /// returning to the document does not have them. Returns true to proceed.
+    private func confirmDiscardingSuggestions() async -> Bool {
+        let pending = await AppControl.pendingSuggestionCount(in: MarkupEditor.selectedWebView)
+        guard let alert = AppControl.sourceSwitchAlert(pending: pending) else { return true }
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
     /// Present a save/discard/cancel alert if the document has unsaved changes.
     /// Returns true to proceed, false if the user cancelled.
     private func checkSave() async -> Bool {
@@ -987,6 +996,7 @@ struct MarkupDocumentView: View {
 extension MarkupDocumentView: MarkupDelegate {
 
     func markupDidLoad(_ view: MarkupWKWebView, handler: (()->Void)?) {
+        Task { await AppControl.shared.refreshPendingSuggestions(in: view) }
         MarkupEditor.selectedWebView = view
         view.setToolbarVisible(!AppConfig.shared.isHidden())
         view.applyColumnWidth()
@@ -1047,10 +1057,21 @@ extension MarkupDocumentView: MarkupDelegate {
 
     func markupInput(_ view: MarkupWKWebView) {
         document.hasChanges = true
+        Task { await AppControl.shared.refreshPendingSuggestions(ifPending: true) }
         Task { @MainActor in
             let selectionState = await view.getSelectionState()
             MarkupEditor.selectionState.reset(from: selectionState)
         }
+    }
+
+    /// Rejecting or navigating suggestions from their widgets changes no text, so a selection change is when to look again.
+    func markupSelectionChanged(_ view: MarkupWKWebView) {
+        Task { await AppControl.shared.refreshPendingSuggestions(ifPending: true) }
+    }
+
+    /// Another editor taking focus can hold a different set of suggestions.
+    func markupTookFocus(_ view: MarkupWKWebView) {
+        Task { await AppControl.shared.refreshPendingSuggestions() }
     }
 
     /// In the macOS version, which uses the markupeditor-base toolbar, pressing the Select... button in the insert

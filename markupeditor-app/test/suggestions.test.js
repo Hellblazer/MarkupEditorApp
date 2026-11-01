@@ -1,7 +1,7 @@
 import { describe, test, expect, vi, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { MU, EditorState, EditorView, AllSelection, TextSelection, DOMSerializer } from 'markupeditor'
+import { MU, Plugin, EditorState, EditorView, AllSelection, TextSelection, DOMSerializer } from 'markupeditor'
 import { history, undo, redo, undoDepth } from 'prosemirror-history'
 import { makeParser } from '../src/parser.js'
 import { makeWarnings } from '../src/warnings.js'
@@ -1319,6 +1319,75 @@ const hashesOfDoc = (document) => describeBlocks(document, {}).blocks.map(b => b
 const plugins = (state) => state.plugins.filter(pl => pl.spec.key === suggestionsKey)
 const edit = (document, block, find, replace, extra = {}) => ({ block, expected: hashOf(document, block), find, replace, ...extra })
 
+describe('Return and Shift-Return on the selected suggestion', () => {
+  // 'a1 b2 c3': s1 is 1..3, s2 is 4..6, s3 is 7..9
+  const three = () => propose(withPlugin(doc(p('a1 b2 c3'))),
+    { block: 0, find: 'a1', replace: 'A' }, { block: 0, find: 'b2', replace: 'B' }, { block: 0, find: 'c3', replace: 'C' })
+  const viewOn = (state, { searching = false } = {}) => {
+    const view = fakeView(state)
+    view.dom.classList = { contains: (name) => searching && name === 'searching' }
+    return view
+  }
+  const select = (view, from, to) => view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)))
+  const press = (view, key, modifiers = {}) =>
+    suggestionsKey.get(view.state).props.handleKeyDown(view, { key, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, ...modifiers })
+  const pendingIds = (view) => getSuggestions(view.state).pending.map(s => s.id)
+
+  test('Return accepts the suggestion the selection exactly covers, and only that one', () => {
+    const view = viewOn(three())
+    select(view, 4, 6)
+    expect(press(view, 'Enter')).toBe(true)
+    expect(view.state.doc.textContent).toBe('a1 B c3')
+    expect(pendingIds(view)).toEqual(['s1', 's3'])
+    expect(getSuggestions(view.state).resolved.map(r => [r.id, r.status])).toEqual([['s2', 'accepted']])
+  })
+
+  test('Shift-Return rejects it and leaves the text alone', () => {
+    const view = viewOn(three())
+    select(view, 4, 6)
+    expect(press(view, 'Enter', { shiftKey: true })).toBe(true)
+    expect(view.state.doc.textContent).toBe('a1 b2 c3')
+    expect(pendingIds(view)).toEqual(['s1', 's3'])
+    expect(getSuggestions(view.state).resolved.map(r => [r.id, r.status])).toEqual([['s2', 'rejected']])
+  })
+
+  test('a selection that does not exactly cover a suggestion leaves the key alone', () => {
+    const view = viewOn(three())
+    for (const [from, to] of [[4, 4], [4, 9], [5, 6], [3, 4], [1, 9]]) {
+      select(view, from, to)
+      expect(press(view, 'Enter'), `Enter on ${from}..${to}`).toBe(false)
+      expect(press(view, 'Enter', { shiftKey: true }), `Shift-Enter on ${from}..${to}`).toBe(false)
+    }
+    expect(view.state.doc.textContent).toBe('a1 b2 c3')
+    expect(pendingIds(view)).toEqual(['s1', 's2', 's3'])
+  })
+
+  test('a key with Command, Control or Option, or any other key, is not handled', () => {
+    const view = viewOn(three())
+    select(view, 4, 6)
+    for (const modifiers of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }]) {
+      expect(press(view, 'Enter', modifiers), JSON.stringify(modifiers)).toBe(false)
+    }
+    for (const key of ['Escape', 'a', 'Tab', 'Backspace']) expect(press(view, key), key).toBe(false)
+    expect(pendingIds(view)).toEqual(['s1', 's2', 's3'])
+  })
+
+  test('while search mode is active the keys belong to search', () => {
+    const view = viewOn(three(), { searching: true })
+    select(view, 4, 6)
+    expect(press(view, 'Enter')).toBe(false)
+    expect(press(view, 'Enter', { shiftKey: true })).toBe(false)
+    expect(pendingIds(view)).toEqual(['s1', 's2', 's3'])
+  })
+
+  test('the plugin is registered ahead of the others, which would otherwise take Return first', () => {
+    const view = fakeView(EditorState.create({ doc: doc(p('one')), plugins: [history()] }))
+    ensureInstalled(view)
+    expect(view.state.plugins[0]).toBe(suggestionsKey.get(view.state))
+    expect(view.state.plugins.length).toBe(2)
+  })
+})
+
 describe('ensureInstalled', () => {
   test('adds the plugin once, however many times it is called', () => {
     const view = plainView(doc(p('one')))
@@ -1356,6 +1425,35 @@ describe('lazy install in a real EditorView', () => {
       expect(host.querySelector('span.suggestion-new').textContent).toContain('dog')
       expect(view.state.doc.eq(document_)).toBe(true)
       expect(undoDepth(view.state)).toBe(0)
+    } finally {
+      view.destroy()
+    }
+  })
+})
+
+describe('Return through a real EditorView that already has a Return handler', () => {
+  const press = (view, init) => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true, ...init }))
+
+  test('the suggestion is accepted or rejected, and the handler that was there first is not asked', () => {
+    const document_ = doc(p('the cat sat'))
+    let asked = 0
+    const existing = new Plugin({ props: { handleKeyDown: (view, event) => { if (event.key === 'Enter') asked++; return event.key === 'Enter' } } })
+    const host = document.createElement('div')
+    const view = new EditorView(host, { state: EditorState.create({ doc: document_, plugins: [history(), existing] }) })
+    try {
+      active(view)
+      JSON.parse(proposeEdits([edit(document_, 0, 'cat', 'dog')]))
+      const s1 = getSuggestions(view.state).pending[0]
+      expect(view.state.plugins[0]).toBe(suggestionsKey.get(view.state))
+
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, s1.from, s1.to)))
+      press(view, { shiftKey: true })
+      expect(getSuggestions(view.state).resolved.map(r => r.status)).toEqual(['rejected'])
+      expect(asked).toBe(0)
+
+      press(view)                                  // nothing is selected as a suggestion any more
+      expect(asked).toBe(1)
+      expect(view.state.doc.textContent).toBe('the cat sat')
     } finally {
       view.destroy()
     }
