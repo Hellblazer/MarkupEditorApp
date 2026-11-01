@@ -13,14 +13,23 @@ import SwiftUI
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     var keymap: KeymapConfig?
-    /// Whether assistants are on, whether the source view is showing, and how many suggestions are pending in
-    /// the selected editor. A property so tests can supply them.
-    var suggestionsState: () -> (enabled: Bool, sourceShowing: Bool, pending: Int) = {
-        (enabled: AppControl.shared.isEnabled, sourceShowing: AppControl.shared.sourceShowing, pending: AppControl.shared.pendingSuggestions)
+    /// Whether assistants are on, whether the source view is showing, how many suggestions are pending in the
+    /// selected editor, and whether the selection is exactly one of them. A property so tests can supply them.
+    var suggestionsState: () -> (enabled: Bool, sourceShowing: Bool, pending: Int, selected: Bool) = {
+        (enabled: AppControl.shared.isEnabled, sourceShowing: AppControl.shared.sourceShowing,
+         pending: AppControl.shared.pendingSuggestions, selected: AppControl.shared.suggestionSelected)
     }
     /// The JavaScript of the Edit > Suggestions commands.
     private static let suggestionCommands: Set<String> = [
-        "MU.nextSuggestion()", "MU.previousSuggestion()", "MU.acceptAllSuggestions()", "MU.rejectAllSuggestions()",
+        "MU.nextSuggestion()", "MU.previousSuggestion()",
+        "MU.acceptAndNextSuggestion()", "MU.acceptAndPreviousSuggestion()",
+        "MU.rejectAndNextSuggestion()", "MU.rejectAndPreviousSuggestion()",
+        "MU.acceptAllSuggestions()", "MU.rejectAllSuggestions()",
+    ]
+    /// The commands that act on the selected suggestion, so need the selection to be on one.
+    private static let selectedSuggestionCommands: Set<String> = [
+        "MU.acceptAndNextSuggestion()", "MU.acceptAndPreviousSuggestion()",
+        "MU.rejectAndNextSuggestion()", "MU.rejectAndPreviousSuggestion()",
     ]
     private var openRecentMenu = NSMenu(title: "Open Recent")
     /// Direct accessor for the running AppDelegate instance, set in applicationWillFinishLaunching.
@@ -526,7 +535,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         default:
             if menuItem.action == #selector(executeMenuJS(_:)), let js = menuItem.representedObject as? String, Self.suggestionCommands.contains(js) {
                 let state = suggestionsState()
-                return state.enabled && !state.sourceShowing && state.pending > 0
+                guard state.enabled && !state.sourceShowing && state.pending > 0 else { return false }
+                return state.selected || !Self.selectedSuggestionCommands.contains(js)
             }
             return true
         }
@@ -568,18 +578,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Edit > Suggestions: step through, or settle all at once, the proposals an assistant made.
-    /// The item is hidden while assistants are off, and its commands are enabled only while some
-    /// suggestion is pending and the editor, not the source view, is showing (see `suggestionsState`).
-    /// Next and Previous take Cmd-' and Cmd-Shift-' (Xcode's next/previous issue chords); none of
-    /// the menu, keymapconfig.json or the editor's own keymap uses them. Accept All and Reject All
-    /// change text, so they carry no shortcut. AppKit matches a key equivalent against the key's
-    /// characters with Shift applied, so Previous is the shifted character `"` with Command alone:
-    /// `'` with Command and Shift is displayed the same and is never delivered (pinned in
-    /// SuggestionsHeadlessTests).
+    /// The item is hidden while assistants are off, and its commands are enabled only while some suggestion is
+    /// pending and the editor, not the source view, is showing; the accept and reject commands that move on also
+    /// need the selection to be on a suggestion (see `suggestionsState`).
+    /// The `'` key moves: Cmd-' goes to the next suggestion and Cmd-Shift-' to the previous (Xcode's next/previous
+    /// issue chords). Adding Option accepts the selected suggestion first and Control rejects it. None of these is used
+    /// elsewhere in the menu, keymapconfig.json or the editor's keymap. Accept All and Reject All change text
+    /// throughout, so they carry no shortcut. Return and Shift+Return, which only the editor handles, accept and reject
+    /// and go to the next one. AppKit matches a key equivalent against the key's characters with Shift applied,
+    /// so a Previous chord is the shifted character `"` without Shift in the mask: `'` with Shift is displayed the same
+    /// and is never delivered (pinned in SuggestionsHeadlessTests).
     private func buildSuggestionsSubmenuItem() -> NSMenuItem {
         let submenu = NSMenu(title: "Suggestions")
         submenu.addItem(jsMenuItem(title: "Next Suggestion", js: "MU.nextSuggestion()", keyEquivalent: "'", modifierMask: .command))
         submenu.addItem(jsMenuItem(title: "Previous Suggestion", js: "MU.previousSuggestion()", keyEquivalent: "\"", modifierMask: .command))
+        submenu.addItem(.separator())
+        submenu.addItem(jsMenuItem(title: "Accept+Next", js: "MU.acceptAndNextSuggestion()", keyEquivalent: "'", modifierMask: [.command, .option]))
+        submenu.addItem(jsMenuItem(title: "Accept+Previous", js: "MU.acceptAndPreviousSuggestion()", keyEquivalent: "\"", modifierMask: [.command, .option]))
+        submenu.addItem(jsMenuItem(title: "Reject+Next", js: "MU.rejectAndNextSuggestion()", keyEquivalent: "'", modifierMask: [.command, .control]))
+        submenu.addItem(jsMenuItem(title: "Reject+Previous", js: "MU.rejectAndPreviousSuggestion()", keyEquivalent: "\"", modifierMask: [.command, .control]))
         submenu.addItem(.separator())
         submenu.addItem(jsMenuItem(title: "Accept All Suggestions", js: "MU.acceptAllSuggestions()", modifierMask: []))
         submenu.addItem(jsMenuItem(title: "Reject All Suggestions", js: "MU.rejectAllSuggestions()", modifierMask: []))

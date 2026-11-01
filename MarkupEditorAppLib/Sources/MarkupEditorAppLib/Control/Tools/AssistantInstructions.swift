@@ -7,7 +7,7 @@
 public enum AssistantInstructions {
 
     /// What the assistant tells the user after suggesting edits: how many, and how to review them.
-    public static let suggestionReviewMessage = #"Sent <number> suggestions. Step through them with ⌘' (next) and ⌘" (previous). Press Return to accept the selected suggestion or Shift+Return to reject it, or use the buttons beside it or the Edit > Suggestions menu. The reason for each suggestion shows when you hover over it."#
+    public static let suggestionReviewMessage = #"Sent <number> suggestions. Step through them with ⌘' (next) and ⌘" (previous). Press Return to accept the selected suggestion and move to the next, or Shift+Return to reject it and move to the next. The buttons beside each suggestion accept or reject without moving on, and the Edit > Suggestions menu can also move to the previous one. The reason for each suggestion shows when you hover over it."#
 
     public static let text = """
         MarkupEditor edits the document the user has open. Work through the document tools; the text below covers what the tool descriptions do not.

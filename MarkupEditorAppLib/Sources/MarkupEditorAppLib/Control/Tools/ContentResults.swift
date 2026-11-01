@@ -206,6 +206,29 @@ public struct SuggestionList: Codable, Sendable, Equatable {
     }
 }
 
+/// How many suggestions are pending in the editor and whether the selection is exactly one of them, from `MU.suggestionStatus`.
+public struct SuggestionStatus: Codable, Sendable, Equatable {
+    public var ok: Bool
+    public var reason: String?
+    public var pending: Int
+    public var selected: Bool
+
+    public init(ok: Bool, reason: String? = nil, pending: Int = 0, selected: Bool = false) {
+        self.ok = ok
+        self.reason = reason
+        self.pending = pending
+        self.selected = selected
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        pending = try container.decodeIfPresent(Int.self, forKey: .pending) ?? 0
+        selected = try container.decodeIfPresent(Bool.self, forKey: .selected) ?? false
+    }
+}
+
 extension Encodable {
     /// This value as a `JSONValue`, for a tool reply.
     func jsonValue() throws -> JSONValue {

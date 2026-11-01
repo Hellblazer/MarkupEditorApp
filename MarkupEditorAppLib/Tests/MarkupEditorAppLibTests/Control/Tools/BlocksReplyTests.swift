@@ -118,6 +118,13 @@ struct SuggestionReplyDecodeTests {
         #expect(try ProposeResult.decode(#"{"ok":false,"reason":"No active view"}"#).reason == "No active view")
     }
 
+    @Test func aSuggestionStatusDecodesItsCountAndSelection() throws {
+        let status = try SuggestionStatus.decode(#"{"ok":true,"pending":2,"selected":true}"#)
+        #expect(status == SuggestionStatus(ok: true, pending: 2, selected: true))
+        let refused = try SuggestionStatus.decode(#"{"ok":false,"reason":"No active view"}"#)
+        #expect(!refused.ok && refused.pending == 0 && !refused.selected && refused.reason == "No active view")
+    }
+
     @Test func anEmptyListDecodes() throws {
         let list = try SuggestionList.decode(#"{"ok":true,"suggestions":[]}"#)
         #expect(list.ok)

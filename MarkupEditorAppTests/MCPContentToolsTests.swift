@@ -637,7 +637,7 @@ struct MCPContentToolsTests {
         #expect(proposed.json?["results"]?[0]?["status"] == "proposed" && proposed.json?["results"]?[1]?["status"] == "proposed", Comment(rawValue: proposed.text))
 
         let delegate = AppDelegate()
-        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2) }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2, selected: true) }
         let menu = delegate.buildMenu()
         let next = try Self.apostrophe(.command)
         let previous = try Self.apostrophe([.command, .shift])

@@ -463,9 +463,10 @@ export function selectedSuggestion(state) {
 }
 
 /**
- * Return accepts the selected suggestion and Shift-Return rejects it; any other key, a modified Return, or a
- * selection that is not exactly one suggestion is left to the editor. Search mode also takes Return and
- * Shift-Return and is marked by the `searching` class on the editor element, so it keeps them.
+ * Return accepts the selected suggestion and Shift-Return rejects it, and either then selects the next pending
+ * one; any other key, a modified Return, or a selection that is not exactly one suggestion is left to the
+ * editor. Search mode also takes Return and Shift-Return and is marked by the `searching` class on the editor
+ * element, so it keeps them.
  *
  * @param {object} view - EditorView
  * @param {KeyboardEvent} event
@@ -474,11 +475,25 @@ export function selectedSuggestion(state) {
 export function handleSuggestionKey(view, event) {
   if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey) return false
   if (view.dom.classList.contains('searching')) return false
+  return actOnSelectedSuggestion(view, !event.shiftKey).found
+}
+
+/**
+ * Accept or reject the selected suggestion, then select the next or previous pending one.
+ *
+ * @param {object} view - EditorView
+ * @param {boolean} accept - true to accept, false to reject
+ * @param {'next'|'previous'} [direction] - which pending suggestion to select afterwards
+ * @returns {{found: boolean, id?: string, next?: string|null}} `found` is false, and nothing changes, when the
+ *   selection is not exactly one pending suggestion; `next` is the id now selected, null when none is left
+ */
+export function actOnSelectedSuggestion(view, accept, direction = 'next') {
   const selected = selectedSuggestion(view.state)
-  if (!selected) return false
-  const act = event.shiftKey ? rejectSuggestions : acceptSuggestions
+  if (!selected) return { found: false }
+  const act = accept ? acceptSuggestions : rejectSuggestions
   act(view, [selected.id])
-  return true
+  const moved = goToSuggestion(view, direction)
+  return { found: true, id: selected.id, next: moved.found ? moved.id : null }
 }
 
 // ---------------------------------------------------------------------------
@@ -642,3 +657,20 @@ export const rejectAllSuggestions = bridge('rejectAllSuggestions', (view) => {
   const ids = getSuggestions(view.state).pending.map(s => s.id)
   return { ok: true, count: rejectSuggestions(view, ids).rejected.length }
 })
+
+/** Accept the selected suggestion and select the next. @returns {string} JSON: `{ok: true, found, id?, next?}` */
+export const acceptAndNextSuggestion = bridge('acceptAndNextSuggestion', (view) => ({ ok: true, ...actOnSelectedSuggestion(view, true) }))
+
+/** Reject the selected suggestion and select the next. @returns {string} JSON: `{ok: true, found, id?, next?}` */
+export const rejectAndNextSuggestion = bridge('rejectAndNextSuggestion', (view) => ({ ok: true, ...actOnSelectedSuggestion(view, false) }))
+
+/** Accept the selected suggestion and select the previous. @returns {string} JSON: `{ok: true, found, id?, next?}` */
+export const acceptAndPreviousSuggestion = bridge('acceptAndPreviousSuggestion', (view) => ({ ok: true, ...actOnSelectedSuggestion(view, true, 'previous') }))
+
+/** Reject the selected suggestion and select the previous. @returns {string} JSON: `{ok: true, found, id?, next?}` */
+export const rejectAndPreviousSuggestion = bridge('rejectAndPreviousSuggestion', (view) => ({ ok: true, ...actOnSelectedSuggestion(view, false, 'previous') }))
+
+/** How many suggestions are pending, and whether the selection is exactly one. @returns {string} JSON: `{ok: true, pending, selected}` */
+export const suggestionStatus = bridge('suggestionStatus', (view) => ({
+  ok: true, pending: getSuggestions(view.state).pending.length, selected: selectedSuggestion(view.state) !== null,
+}))

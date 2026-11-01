@@ -104,13 +104,17 @@ import Foundation
     }
 }
 
-// The Edit > Suggestions submenu (P4.1). The four JS strings are the names the web side
+// The Edit > Suggestions submenu (P4.1). The JS strings are the names the web side
 // exports on MU; the JS tests pin the same names, so a rename breaks one of the two.
 @MainActor struct SuggestionsMenuTests {
 
     private static let expectedJS = [
         "Next Suggestion": "MU.nextSuggestion()",
         "Previous Suggestion": "MU.previousSuggestion()",
+        "Accept+Next": "MU.acceptAndNextSuggestion()",
+        "Accept+Previous": "MU.acceptAndPreviousSuggestion()",
+        "Reject+Next": "MU.rejectAndNextSuggestion()",
+        "Reject+Previous": "MU.rejectAndPreviousSuggestion()",
         "Accept All Suggestions": "MU.acceptAllSuggestions()",
         "Reject All Suggestions": "MU.rejectAllSuggestions()",
     ]
@@ -130,13 +134,14 @@ import Foundation
         if let find, let suggestions { #expect(suggestions > find) }
     }
 
-    @Test func testSuggestionsSubmenuHasTheFourCommandsWithTheirJSAndATarget() throws {
+    @Test func testSuggestionsSubmenuHasItsEightCommandsWithTheirJSAndATarget() throws {
         let delegate = AppDelegate()
         let submenu = try #require(suggestionsSubmenu(of: delegate))
         #expect(submenu.items.filter { !$0.isSeparatorItem }.map(\.title)
-                == ["Next Suggestion", "Previous Suggestion", "Accept All Suggestions", "Reject All Suggestions"])
-        try #require(submenu.items.count > 2, "Suggestions items: \(submenu.items.map(\.title))")
-        #expect(submenu.items[2].isSeparatorItem, "a separator sets the all-at-once commands apart")
+                == ["Next Suggestion", "Previous Suggestion", "Accept+Next", "Accept+Previous", "Reject+Next", "Reject+Previous",
+                    "Accept All Suggestions", "Reject All Suggestions"])
+        try #require(submenu.items.count == 10, "Suggestions items: \(submenu.items.map(\.title))")
+        #expect(submenu.items[2].isSeparatorItem && submenu.items[7].isSeparatorItem, "separators set off the selected-suggestion and all-at-once commands")
         for item in submenu.items where !item.isSeparatorItem {
             #expect(item.representedObject as? String == Self.expectedJS[item.title], "\(item.title): \(String(describing: item.representedObject))")
             #expect(item.target === delegate, "\(item.title) target")
@@ -144,12 +149,52 @@ import Foundation
         }
     }
 
-    @Test func testAcceptAndRejectAllCarryNoKeyEquivalent() throws {
+    /// The chord each command shows: the key moves, Shift reverses, Option accepts, Control rejects. Shift is not in the
+    /// mask because the shifted character `"` stands for it.
+    private static let chords: [String: (key: String, mask: NSEvent.ModifierFlags)] = [
+        "Next Suggestion": ("'", .command),
+        "Previous Suggestion": ("\"", .command),
+        "Accept+Next": ("'", [.command, .option]),
+        "Accept+Previous": ("\"", [.command, .option]),
+        "Reject+Next": ("'", [.command, .control]),
+        "Reject+Previous": ("\"", [.command, .control]),
+    ]
+
+    @Test func testEachMovingCommandHasItsChordAndAllAtOnceCommandsHaveNone() throws {
         let delegate = AppDelegate()
         let submenu = try #require(suggestionsSubmenu(of: delegate))
+        for (title, chord) in Self.chords {
+            let item = try #require(submenu.items.first { $0.title == title })
+            #expect(item.keyEquivalent == chord.key, "\(title) key")
+            #expect(item.keyEquivalentModifierMask == chord.mask, "\(title) modifiers")
+        }
         for title in ["Accept All Suggestions", "Reject All Suggestions"] {
             let item = try #require(submenu.items.first { $0.title == title })
-            #expect(item.keyEquivalent.isEmpty, "\(title) changes text; no shortcut")
+            #expect(item.keyEquivalent.isEmpty, "\(title) changes text throughout; no shortcut")
+        }
+    }
+
+    /// A key event as the keyboard delivers it: `typed` is the character without modifiers but with Shift, and Option changes
+    /// what `characters` holds.
+    private func chordEvent(shift: Bool, modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+        let typed = shift ? "\"" : "'"
+        let characters = modifiers.contains(.option) ? (shift ? "Æ" : "æ") : typed
+        let flags = shift ? modifiers.union(.shift) : modifiers
+        return try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+            characters: characters, charactersIgnoringModifiers: typed, isARepeat: false, keyCode: 39))
+    }
+
+    @Test func testEveryChordIsDeliveredToItsItemThroughTheMenu() throws {
+        let delegate = AppDelegate()
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2, selected: true) }
+        let menu = delegate.buildMenu()
+        let submenu = try #require(menu.items.compactMap(\.submenu).first { $0.title == "Edit" }?.items.first { $0.title == "Suggestions" }?.submenu)
+        submenu.update()
+        for (title, chord) in Self.chords {
+            let shift = chord.key == "\""
+            let event = try chordEvent(shift: shift, modifiers: chord.mask)
+            #expect(menu.performKeyEquivalent(with: event), "\(title) was not delivered to a menu item")
         }
     }
 
@@ -188,10 +233,10 @@ import Foundation
         let delegate = AppDelegate()
         let edit = try editMenu(of: delegate)
         let item = try #require(edit.items.first { $0.title == "Suggestions" })
-        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 3) }
+        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 3, selected: false) }
         delegate.menuNeedsUpdate(edit)
         #expect(item.isHidden, "assistants off: nothing can propose, so the item is not offered")
-        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 0) }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 0, selected: false) }
         delegate.menuNeedsUpdate(edit)
         #expect(!item.isHidden)
     }
@@ -200,22 +245,36 @@ import Foundation
         let delegate = AppDelegate()
         let submenu = try #require(suggestionsSubmenu(of: delegate))
         let commands = submenu.items.filter { !$0.isSeparatorItem }
-        try #require(commands.count == 4)
-        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 0) }
+        try #require(commands.count == 8)
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 0, selected: false) }
         for item in commands { #expect(!delegate.validateMenuItem(item), "\(item.title) with none pending") }
-        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2) }
-        for item in commands { #expect(delegate.validateMenuItem(item), "\(item.title) with two pending") }
-        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 2) }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2, selected: true) }
+        for item in commands { #expect(delegate.validateMenuItem(item), "\(item.title) with two pending and one selected") }
+        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 2, selected: true) }
         for item in commands { #expect(!delegate.validateMenuItem(item), "\(item.title) with assistants off") }
-        delegate.suggestionsState = { (enabled: true, sourceShowing: true, pending: 2) }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: true, pending: 2, selected: true) }
         for item in commands { #expect(!delegate.validateMenuItem(item), "\(item.title) while the source view is showing") }
+    }
+
+    @Test func testTheAcceptAndRejectCommandsNeedTheSelectionToBeOnASuggestion() throws {
+        let delegate = AppDelegate()
+        let submenu = try #require(suggestionsSubmenu(of: delegate))
+        let needSelection: Set = ["Accept+Next", "Accept+Previous", "Reject+Next", "Reject+Previous"]
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2, selected: false) }
+        for item in submenu.items where !item.isSeparatorItem {
+            #expect(delegate.validateMenuItem(item) == !needSelection.contains(item.title), "\(item.title) with two pending, none selected")
+        }
+        delegate.suggestionsState = { (enabled: true, sourceShowing: false, pending: 2, selected: true) }
+        for item in submenu.items where !item.isSeparatorItem {
+            #expect(delegate.validateMenuItem(item), "\(item.title) with one selected")
+        }
     }
 
     @Test func testOtherEditorCommandsAreNotAffectedByTheSuggestionState() throws {
         let delegate = AppDelegate()
         let edit = try editMenu(of: delegate)
         let find = try #require(edit.items.first { $0.title == "Find" })
-        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 0) }
+        delegate.suggestionsState = { (enabled: false, sourceShowing: false, pending: 0, selected: false) }
         #expect(delegate.validateMenuItem(find))
     }
 }

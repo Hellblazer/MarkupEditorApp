@@ -308,7 +308,7 @@ struct SuggestionsHeadlessTests {
         #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The dog sat on the mat"))
         #expect(try await Self.blocks(webView).count == blocksBefore, "Return did not split the paragraph")
 
-        try await Self.userRuns(webView, "MU.nextSuggestion()")
+        // Accepting moved on: the second suggestion is already selected.
         try await Self.userPressesReturn(webView, shift: true)
         #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The dog sat on the mat"), "rejecting leaves the text")
         let statuses = try await webView.listSuggestions().suggestions.map(\.status)
@@ -323,5 +323,43 @@ struct SuggestionsHeadlessTests {
         try await Self.userPressesReturn(webView)
         #expect(try await Self.blocks(webView).count == before + 1, "the caret is not on the suggestion, so Return is the editor's")
         #expect(await AppControl.pendingSuggestionCount(in: webView) == 1)
+    }
+
+    @Test func theStatusSaysWhetherTheSelectionIsOnAPendingSuggestion() async throws {
+        let (_, webView) = try await Self.loaded()
+        #expect(await AppControl.suggestionStatus(in: webView) == SuggestionStatus(ok: true, pending: 0, selected: false))
+        _ = try await webView.proposeEdits([
+            try await Self.edit(webView, 1, "cat", "dog"),
+            try await Self.edit(webView, 1, "mat", "rug"),
+        ])
+        #expect(await AppControl.suggestionStatus(in: webView) == SuggestionStatus(ok: true, pending: 2, selected: false))
+        try await Self.userRuns(webView, "MU.nextSuggestion()")
+        #expect(await AppControl.suggestionStatus(in: webView) == SuggestionStatus(ok: true, pending: 2, selected: true))
+        try await Self.userRuns(webView, "MU.acceptAndNextSuggestion()")
+        #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The dog sat on the mat"))
+        #expect(await AppControl.suggestionStatus(in: webView) == SuggestionStatus(ok: true, pending: 1, selected: true), "the next one is selected")
+        try await Self.userRuns(webView, "MU.rejectAndNextSuggestion()")
+        #expect(await AppControl.suggestionStatus(in: webView) == SuggestionStatus(ok: true, pending: 0, selected: false))
+    }
+
+    @Test func noEditorHasAnEmptyStatus() async {
+        #expect(await AppControl.suggestionStatus(in: nil) == SuggestionStatus(ok: true, pending: 0, selected: false))
+    }
+
+    @Test func acceptAndPreviousAndRejectAndPreviousSelectTheEarlierSuggestion() async throws {
+        let (_, webView) = try await Self.loaded()
+        _ = try await webView.proposeEdits([
+            try await Self.edit(webView, 1, "cat", "dog"),
+            try await Self.edit(webView, 1, "mat", "rug"),
+            try await Self.edit(webView, 1, "dog", "fox"),
+        ])
+        try await Self.userRuns(webView, "MU.nextSuggestion()")
+        try await Self.userRuns(webView, "MU.nextSuggestion()")      // the second is selected
+        try await Self.userRuns(webView, "MU.acceptAndPreviousSuggestion()")
+        #expect(try await Self.blockAt(webView, 1).markdown.hasPrefix("The cat sat on the rug"))
+        #expect(await AppControl.suggestionStatus(in: webView) == SuggestionStatus(ok: true, pending: 2, selected: true), "an earlier one is selected")
+        try await Self.userRuns(webView, "MU.rejectAndPreviousSuggestion()")
+        #expect(await AppControl.pendingSuggestionCount(in: webView) == 1)
+        #expect(try await webView.listSuggestions().suggestions.map(\.status).sorted() == ["accepted", "pending", "rejected"])
     }
 }

@@ -234,6 +234,11 @@ extension MarkupWKWebView {
         try SuggestionList.decode(await runBlockFunction("MU.listSuggestions()", name: "listSuggestions"))
     }
 
+    /// How many suggestions are pending and whether the selection is exactly one of them, from `MU.suggestionStatus`.
+    public func suggestionStatus() async throws(ContentBridgeError) -> SuggestionStatus {
+        try SuggestionStatus.decode(await runBlockFunction("MU.suggestionStatus()", name: "suggestionStatus"))
+    }
+
     /// The JSON encoding of `value`, which is also a JavaScript literal, so no argument needs hand escaping.
     static func jsLiteral<T: Encodable>(_ value: T) -> String {
         guard let data = try? JSONEncoder().encode(value), let text = String(data: data, encoding: .utf8) else { return "null" }

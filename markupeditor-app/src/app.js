@@ -16,6 +16,7 @@ import { selectText } from "./select-text.js"
 import { replaceBlocks } from "./replace-blocks.js"
 import {
   proposeEdits, listSuggestions, nextSuggestion, previousSuggestion, acceptAllSuggestions, rejectAllSuggestions,
+  acceptAndNextSuggestion, rejectAndNextSuggestion, acceptAndPreviousSuggestion, rejectAndPreviousSuggestion, suggestionStatus,
 } from "./suggestions.js"
 
 // Register the delegate so it can be looked up by name when the MarkupEditor instance is created.
@@ -38,6 +39,11 @@ MU.nextSuggestion = nextSuggestion
 MU.previousSuggestion = previousSuggestion
 MU.acceptAllSuggestions = acceptAllSuggestions
 MU.rejectAllSuggestions = rejectAllSuggestions
+MU.acceptAndNextSuggestion = acceptAndNextSuggestion
+MU.rejectAndNextSuggestion = rejectAndNextSuggestion
+MU.acceptAndPreviousSuggestion = acceptAndPreviousSuggestion
+MU.rejectAndPreviousSuggestion = rejectAndPreviousSuggestion
+MU.suggestionStatus = suggestionStatus
 // Override markupeditor-base MU.insertTable to force a header in Markdown
 MU.insertTable = makeInsertTableWithHeader(MU.insertTable, () => MU.activeView())
 

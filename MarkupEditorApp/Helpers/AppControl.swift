@@ -38,13 +38,15 @@ final class AppControl {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey)
             reconcile()
-            if isEnabled { Task { await refreshPendingSuggestions() } } else { pendingSuggestions = 0 }
+            if isEnabled { Task { await refreshPendingSuggestions() } } else { pendingSuggestions = 0; suggestionSelected = false }
         }
     }
 
     /// How many suggestions are pending in the selected editor. Menu validation is synchronous and cannot ask the
     /// editor, so the Edit > Suggestions commands read this.
     private(set) var pendingSuggestions = 0
+    /// Whether the selection is exactly one pending suggestion, which Accept+Next and Reject+Next act on.
+    private(set) var suggestionSelected = false
 
     /// Whether images an assistant adds must have a relative path; any other source is turned into a link.
     var restrictImages: Bool {
@@ -77,18 +79,25 @@ final class AppControl {
         approvals = store.approvals()
     }
 
-    /// The number of pending suggestions in `view`, zero when there is no editor or it cannot say.
-    static func pendingSuggestionCount(in view: MarkupWKWebView?) async -> Int {
-        guard let view, let list = try? await view.listSuggestions(), list.ok else { return 0 }
-        return list.suggestions.filter { $0.status == "pending" }.count
+    /// The pending count and selection state of `view`'s suggestions; empty when there is no editor or it cannot say.
+    static func suggestionStatus(in view: MarkupWKWebView?) async -> SuggestionStatus {
+        guard let view, let status = try? await view.suggestionStatus(), status.ok else { return SuggestionStatus(ok: true) }
+        return status
     }
 
-    /// Re-reads `pendingSuggestions` from the selected editor. With `ifPending`, does nothing when none are pending:
+    /// The number of pending suggestions in `view`, zero when there is no editor or it cannot say.
+    static func pendingSuggestionCount(in view: MarkupWKWebView?) async -> Int {
+        await suggestionStatus(in: view).pending
+    }
+
+    /// Re-reads the suggestion state from the selected editor. With `ifPending`, does nothing when none are pending:
     /// only a proposal, which always refreshes, can add one.
     func refreshPendingSuggestions(ifPending: Bool = false, in view: MarkupWKWebView? = nil) async {
-        guard isEnabled else { pendingSuggestions = 0; return }
+        guard isEnabled else { pendingSuggestions = 0; suggestionSelected = false; return }
         if ifPending && pendingSuggestions == 0 { return }
-        pendingSuggestions = await Self.pendingSuggestionCount(in: view ?? MarkupEditor.selectedWebView)
+        let status = await Self.suggestionStatus(in: view ?? MarkupEditor.selectedWebView)
+        pendingSuggestions = status.pending
+        suggestionSelected = status.selected
     }
 
     /// What to tell the user before the source view replaces the editor, or nil when no suggestion would be lost.

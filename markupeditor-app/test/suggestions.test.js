@@ -10,8 +10,9 @@ import { planReplace } from '../src/replace-blocks.js'
 import { describeBlocks } from '../src/doc-blocks.js'
 import {
   findInBlock, planProposals, suggestionsKey, suggestionsPlugin, getSuggestions,
-  acceptSuggestions, rejectSuggestions, nextSuggestionTarget, goToSuggestion, buildWidget,
+  acceptSuggestions, rejectSuggestions, nextSuggestionTarget, goToSuggestion, selectedSuggestion, buildWidget,
   ensureInstalled, proposeEdits, listSuggestions, nextSuggestion, previousSuggestion, acceptAllSuggestions, rejectAllSuggestions,
+  acceptAndNextSuggestion, rejectAndNextSuggestion, acceptAndPreviousSuggestion, rejectAndPreviousSuggestion, suggestionStatus,
 } from '../src/suggestions.js'
 
 const { schema } = MU
@@ -1351,6 +1352,28 @@ describe('Return and Shift-Return on the selected suggestion', () => {
     expect(getSuggestions(view.state).resolved.map(r => [r.id, r.status])).toEqual([['s2', 'rejected']])
   })
 
+  test('after Return or Shift-Return the next pending suggestion is selected', () => {
+    for (const shiftKey of [false, true]) {
+      const view = viewOn(three())
+      select(view, 4, 6)
+      press(view, 'Enter', { shiftKey })
+      expect(selectedSuggestion(view.state)?.id, shiftKey ? 'after reject' : 'after accept').toBe('s3')
+    }
+  })
+
+  test('repeated Returns work through every suggestion, wrapping past the end, until none are left', () => {
+    const view = viewOn(three())
+    select(view, 7, 9)                                  // start on the last one
+    press(view, 'Enter')
+    expect(view.state.doc.textContent).toBe('a1 b2 C')
+    expect(selectedSuggestion(view.state)?.id).toBe('s1')   // wrapped to the first
+    press(view, 'Enter')
+    press(view, 'Enter', { shiftKey: true })
+    expect(view.state.doc.textContent).toBe('A b2 C')
+    expect(pendingIds(view)).toEqual([])
+    expect(selectedSuggestion(view.state)).toBeNull()    // nothing left to move to
+  })
+
   test('a selection that does not exactly cover a suggestion leaves the key alone', () => {
     const view = viewOn(three())
     for (const [from, to] of [[4, 4], [4, 9], [5, 6], [3, 4], [1, 9]]) {
@@ -1428,6 +1451,88 @@ describe('lazy install in a real EditorView', () => {
     } finally {
       view.destroy()
     }
+  })
+})
+
+describe('acceptAndNextSuggestion, rejectAndNextSuggestion and suggestionStatus', () => {
+  const setup = () => {
+    const document = doc(p('a1 b2 c3'))
+    const view = plainView(document)
+    active(view)
+    proposeEdits([edit(document, 0, 'a1', 'A'), edit(document, 0, 'b2', 'B')])
+    return view
+  }
+  const status = () => JSON.parse(suggestionStatus())
+
+  test('status gives the pending count and whether the selection is on one of them', () => {
+    setup()
+    expect(status()).toEqual({ ok: true, pending: 2, selected: false })
+    nextSuggestion()
+    expect(status()).toEqual({ ok: true, pending: 2, selected: true })
+  })
+
+  test('status with nothing proposed is zero and not selected', () => {
+    active(plainView(doc(p('one'))))
+    expect(status()).toEqual({ ok: true, pending: 0, selected: false })
+  })
+
+  test('acceptAndNext accepts the selected suggestion and selects the next', () => {
+    const view = setup()
+    nextSuggestion()
+    expect(JSON.parse(acceptAndNextSuggestion())).toEqual({ ok: true, found: true, id: 's1', next: 's2' })
+    expect(view.state.doc.textContent).toBe('A b2 c3')
+    expect(selectedSuggestion(view.state)?.id).toBe('s2')
+  })
+
+  test('rejectAndNext rejects it, leaves the text, and selects the next', () => {
+    const view = setup()
+    nextSuggestion()
+    expect(JSON.parse(rejectAndNextSuggestion())).toEqual({ ok: true, found: true, id: 's1', next: 's2' })
+    expect(view.state.doc.textContent).toBe('a1 b2 c3')
+    expect(selectedSuggestion(view.state)?.id).toBe('s2')
+  })
+
+  test('acceptAndPrevious accepts the selected suggestion and selects the one before it', () => {
+    const view = setup()
+    nextSuggestion()
+    nextSuggestion()                                  // s2 is selected
+    expect(JSON.parse(acceptAndPreviousSuggestion())).toEqual({ ok: true, found: true, id: 's2', next: 's1' })
+    expect(view.state.doc.textContent).toBe('a1 B c3')
+    expect(selectedSuggestion(view.state)?.id).toBe('s1')
+  })
+
+  test('rejectAndPrevious rejects it, leaves the text, and selects the one before it', () => {
+    const view = setup()
+    nextSuggestion()
+    nextSuggestion()
+    expect(JSON.parse(rejectAndPreviousSuggestion())).toEqual({ ok: true, found: true, id: 's2', next: 's1' })
+    expect(view.state.doc.textContent).toBe('a1 b2 c3')
+    expect(selectedSuggestion(view.state)?.id).toBe('s1')
+  })
+
+  test('the previous forms wrap to the last pending suggestion from the first, and do nothing off a suggestion', () => {
+    const view = setup()
+    expect(JSON.parse(acceptAndPreviousSuggestion())).toEqual({ ok: true, found: false })
+    expect(JSON.parse(rejectAndPreviousSuggestion())).toEqual({ ok: true, found: false })
+    nextSuggestion()                                  // s1
+    expect(JSON.parse(rejectAndPreviousSuggestion())).toEqual({ ok: true, found: true, id: 's1', next: 's2' })
+    expect(view.state.doc.textContent).toBe('a1 b2 c3')
+  })
+
+  test('on the last pending suggestion next is null', () => {
+    setup()
+    nextSuggestion()
+    acceptAndNextSuggestion()
+    expect(JSON.parse(acceptAndNextSuggestion())).toEqual({ ok: true, found: true, id: 's2', next: null })
+    expect(status()).toEqual({ ok: true, pending: 0, selected: false })
+  })
+
+  test('when the selection is not on a suggestion nothing happens', () => {
+    const view = setup()
+    expect(JSON.parse(acceptAndNextSuggestion())).toEqual({ ok: true, found: false })
+    expect(JSON.parse(rejectAndNextSuggestion())).toEqual({ ok: true, found: false })
+    expect(view.state.doc.textContent).toBe('a1 b2 c3')
+    expect(status().pending).toBe(2)
   })
 })
 
