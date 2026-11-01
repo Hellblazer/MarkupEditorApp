@@ -129,7 +129,7 @@ struct AppControlFacade: ControlFacade {
     func replaceBlocks(index: Int, count: Int, markdown: String, expected: [String], allowLoss: Bool) async throws -> ReplaceResult {
         _ = try editorWebView(for: "replace_blocks")
         let text = control.document?.normalizeSmartPunctuation(in: markdown) ?? markdown
-        var result = try await control.edits.run {
+        let result = try await control.edits.run {
             // The view and the document may have changed while this call waited its turn.
             let webView = try editorWebView(for: "replace_blocks")
             let document = control.document
