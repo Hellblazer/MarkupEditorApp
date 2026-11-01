@@ -89,4 +89,31 @@ struct AssistantInstructionsTests {
             #expect(text.contains(kept), Comment(rawValue: kept))
         }
     }
+
+    @Test func theTextSaysWhatToTellTheUserAfterProposing() throws {
+        let text = AssistantInstructions.text
+        let message = AssistantInstructions.suggestionReviewMessage
+        #expect(text.contains(message))
+        for phrase in ["Sent <number> suggestions", "⌘' (next)", "⌘\" (previous)", "Press Return to accept", "Shift+Return to reject", "Edit > Suggestions", "hover"] {
+            #expect(message.contains(phrase), Comment(rawValue: phrase))
+        }
+        #expect(!message.contains("Cmd") && !message.contains("Ctrl") && !message.contains("ctl"), "the shortcuts are written as the menu shows them")
+        let propose = try #require(ControlTools.named("propose_edits"))
+        #expect(propose.description.contains(message), "the tool description repeats the message")
+    }
+
+    @Test func theTextAsksForANotePerSuggestionBecauseItIsWhatHoverShows() throws {
+        #expect(AssistantInstructions.text.contains("Give every suggestion a note"))
+        let propose = try #require(ControlTools.named("propose_edits"))
+        #expect(propose.description.contains("Give every suggestion a note"))
+    }
+
+    @Test func theTextForbidsIdsInWhatTheAssistantSaysAndShowsTheSpelledOutForm() throws {
+        let text = AssistantInstructions.text
+        for phrase in ["never shown to the user", "suggestion 8 (\"", "digits of its id", "any comment on your suggestions"] {
+            #expect(text.contains(phrase), Comment(rawValue: phrase))
+        }
+        let propose = try #require(ControlTools.named("propose_edits"))
+        #expect(propose.description.contains("suggestion 8 (\""), "the tool description gives the same form")
+    }
 }
