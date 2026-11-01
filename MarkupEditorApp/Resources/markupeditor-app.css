@@ -91,7 +91,7 @@
 
 .suggestion-new {
   margin-left: 2px;
-  padding: 0 4px;
+  padding: 0 0 0 4px;
   border-radius: 4px;
   background-color: rgba(74, 194, 107, 0.25);
 }
@@ -102,6 +102,8 @@
 }
 
 .suggestion-new button {
+  position: relative;
+  top: -1.5px;   /* centers the button on the text; moving it leaves the line height alone */
   margin-left: 4px;
   padding: 0 6px;
   font: inherit;
@@ -116,6 +118,18 @@
 .suggestion-new button:hover {
   background-color: rgba(128, 128, 128, 0.2);
 }
+.suggestion-new button.suggestion-accept {
+  border-color: #1a7f37;
+}
+/* Reject is the shade of the struck-out text, which sits on the editor background. The button sits on the green
+   replacement, so the red is mixed into the editor background to stay opaque and look the same. */
+.suggestion-new button.suggestion-reject {
+  border-color: #cf222e;
+  background-color: color-mix(in srgb, #ff8182 25%, white);
+}
+.suggestion-new button.suggestion-reject:hover {
+  background-color: color-mix(in srgb, #ff8182 40%, white);
+}
 
 @media (prefers-color-scheme: dark) {
   .suggestion-old {
@@ -127,6 +141,16 @@
   }
   .suggestion-new button {
     border-color: #30363d;
+  }
+  .suggestion-new button.suggestion-accept {
+    border-color: #3fb950;
+  }
+  .suggestion-new button.suggestion-reject {
+    border-color: #ff7b72;
+    background-color: color-mix(in srgb, #f85149 30%, #24292d);
+  }
+  .suggestion-new button.suggestion-reject:hover {
+    background-color: color-mix(in srgb, #f85149 45%, #24292d);
   }
 }
 
