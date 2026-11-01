@@ -19,14 +19,23 @@ extension MarkupWKWebView {
         }
     }
 
-    public func exportMarkdown(content: String?) async -> String? {
+    /// Exports the live document. Without `options` the call is the positional-string form, which the editor
+    /// treats as no options.
+    public func exportMarkdown(content: String?, options: MarkdownExportOptions? = nil) async -> String? {
         guard let content else { return nil }
+        let argument = options.map { Self.jsLiteral($0) } ?? "'\(content.escaped)'"
         return await withCheckedContinuation { continuation in
-            executeJavaScript("MU.exportMarkdown('\(content.escaped)')") { result, error in
+            executeJavaScript("MU.exportMarkdown(\(argument))") { result, error in
                 if let error { Logger.webview.error("Error exporting Markdown: \(error)") }
                 continuation.resume(returning: error == nil ? result as? String : nil)
             }
         }
+    }
+
+    /// Records a source map for `baseText` in the editor and returns its JSON envelope (see `RebaseResult`),
+    /// or `nil` when the call fails.
+    public func rebaseSource(_ baseText: String) async -> String? {
+        await runBlockFunction("MU.rebaseSource(\(Self.jsLiteral(baseText)))", name: "rebaseSource")
     }
 
     /// The top-level block index (0-based) containing the active editor's current selection,
@@ -198,10 +207,11 @@ extension MarkupWKWebView {
     }
 
     /// Replace, insert or delete blocks through `MU.replaceBlocks`. Unless `restrictImages` is false, an image
-    /// without a relative source is turned into a link. A refusal comes back as a result with `ok` false; only
-    /// a failure to reach or read the editor throws.
-    public func replaceBlocks(index: Int, count: Int, markdown: String, expected: [String], allowLoss: Bool, restrictImages: Bool = true) async throws(ContentBridgeError) -> ReplaceResult {
-        let call = "MU.replaceBlocks(\(index), \(count), \(Self.jsLiteral(markdown)), \(Self.jsLiteral(expected)), \(allowLoss), \(restrictImages))"
+    /// without a relative source is turned into a link, and an HTML header may not load from a web address.
+    /// With `allowSpecialBlocks` false, front matter and an HTML header cannot be created. A refusal comes back
+    /// as a result with `ok` false; only a failure to reach or read the editor throws.
+    public func replaceBlocks(index: Int, count: Int, markdown: String, expected: [String], allowLoss: Bool, restrictImages: Bool = true, allowSpecialBlocks: Bool = true) async throws(ContentBridgeError) -> ReplaceResult {
+        let call = "MU.replaceBlocks(\(index), \(count), \(Self.jsLiteral(markdown)), \(Self.jsLiteral(expected)), \(allowLoss), \(restrictImages), \(allowSpecialBlocks))"
         return try ReplaceResult.decode(await runBlockFunction(call, name: "replaceBlocks"))
     }
 
