@@ -198,6 +198,84 @@ import Foundation
         }
     }
 
+    @Test func testTheMenuTakesItsChordsFromTheKeymap() throws {
+        var keymap = KeymapConfig()
+        keymap.bindings["suggestionNext"] = [KeyBinding.from(spec: "Mod-Alt-n")]
+        keymap.bindings["suggestionPrevious"] = [KeyBinding.from(spec: "")]
+        let delegate = AppDelegate()
+        delegate.keymap = keymap
+        let submenu = try #require(suggestionsSubmenu(of: delegate))
+        let next = try #require(submenu.items.first { $0.title == "Next Suggestion" })
+        let previous = try #require(submenu.items.first { $0.title == "Previous Suggestion" })
+        #expect(next.keyEquivalent == "n" && next.keyEquivalentModifierMask == [.command, .option])
+        #expect(previous.keyEquivalent.isEmpty, "a cleared binding leaves the item without a shortcut")
+        let acceptNext = try #require(submenu.items.first { $0.title == "Accept+Next" })
+        #expect(acceptNext.keyEquivalent == "'", "an action the keymap leaves alone keeps its default")
+    }
+
+    private func item(titled title: String, in menu: NSMenu) -> NSMenuItem? {
+        for item in menu.items {
+            if item.title == title { return item }
+            if let submenu = item.submenu, let found = self.item(titled: title, in: submenu) { return found }
+        }
+        return nil
+    }
+
+    @Test func testChangingTheKeymapUpdatesTheBuiltMenuInPlace() throws {
+        let delegate = AppDelegate()
+        let menu = delegate.buildMenu()
+        var changed = KeymapConfig()
+        changed.bindings["suggestionAcceptPrevious"] = [KeyBinding.from(spec: "Mod-Alt-[")]
+        changed.bindings["suggestionNext"] = [KeyBinding.from(spec: "")]
+        changed.bindings["bold"] = [KeyBinding.from(spec: "Mod-Shift-y")]
+        delegate.applyKeymap(changed, to: menu)
+
+        let acceptPrevious = try #require(item(titled: "Accept+Previous", in: menu))
+        #expect(acceptPrevious.keyEquivalent == "[" && acceptPrevious.keyEquivalentModifierMask == [.command, .option])
+        let next = try #require(item(titled: "Next Suggestion", in: menu))
+        #expect(next.keyEquivalent.isEmpty, "a cleared binding removes the shortcut")
+        let bold = try #require(item(titled: "Bold", in: menu), "the Format menu has Bold")
+        #expect(bold.keyEquivalent == "y" && bold.keyEquivalentModifierMask == [.command, .shift], "Format items follow the keymap too")
+        let find = try #require(item(titled: "Find", in: menu))
+        #expect(find.keyEquivalent == "f", "an item the keymap does not drive is left alone")
+        let unchanged = try #require(item(titled: "Reject+Next", in: menu))
+        #expect(unchanged.keyEquivalent == "'" && unchanged.keyEquivalentModifierMask == [.command, .control])
+    }
+
+    @Test func testAMenuBuiltAfterTheChangeUsesTheNewKeymap() throws {
+        var changed = KeymapConfig()
+        changed.bindings["suggestionAcceptPrevious"] = [KeyBinding.from(spec: "Mod-Alt-[")]
+        let delegate = AppDelegate()
+        delegate.keymap = changed
+        let menu = delegate.buildMenu()
+        let acceptPrevious = try #require(item(titled: "Accept+Previous", in: menu))
+        #expect(acceptPrevious.keyEquivalent == "[" && acceptPrevious.keyEquivalentModifierMask == [.command, .option])
+    }
+
+    @Test func testSavingTheKeymapReachesTheRunningMenu() async throws {
+        let key = AppConfig.ConfigKey.keymap
+        let before = UserDefaults.standard.string(forKey: key)
+        defer {
+            if let before { UserDefaults.standard.set(before, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            NotificationCenter.default.post(name: .keymapDidChange, object: nil)
+        }
+        // The delegate that launched the test host holds the running menu, so the whole path runs: the saved JSON, the
+        // notification the Settings view posts, the delegate's observer, and the menu items.
+        // A binding nobody has saved: the test host shares the app's preferences, so a real saved value could already be showing.
+        UserDefaults.standard.set(#"{"suggestionAcceptPrevious":"Mod-Ctrl-;"}"#, forKey: key)
+        NotificationCenter.default.post(name: .keymapDidChange, object: nil)
+        var found: NSMenuItem?
+        for _ in 0..<40 {
+            if let menu = NSApplication.shared.mainMenu, let item = item(titled: "Accept+Previous", in: menu), item.keyEquivalent == ";" {
+                found = item
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let item = try #require(found, "the running menu did not pick up the saved binding")
+        #expect(item.keyEquivalentModifierMask == [.command, .control])
+    }
+
     @Test func testNoKeyEquivalentCollidesAcrossTheWholeMenuWithOrWithoutTheKeymap() {
         for withKeymap in [false, true] {
             let delegate = AppDelegate()
