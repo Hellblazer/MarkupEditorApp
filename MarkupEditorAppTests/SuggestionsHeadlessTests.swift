@@ -362,4 +362,66 @@ struct SuggestionsHeadlessTests {
         #expect(await AppControl.pendingSuggestionCount(in: webView) == 1)
         #expect(try await webView.listSuggestions().suggestions.map(\.status).sorted() == ["accepted", "pending", "rejected"])
     }
+
+    @Test func theDiscardWarningAppearsOnlyWithPendingSuggestionsAndCountsThem() throws {
+        #expect(AppControl.discardWarning(pending: 0) == nil)
+        let one = try #require(AppControl.discardWarning(pending: 1))
+        #expect(one.message == "Discard the pending suggestions?")
+        #expect(one.detail.contains("1 pending suggestion "), Comment(rawValue: one.detail))
+        let three = try #require(AppControl.discardWarning(pending: 3))
+        #expect(three.detail.contains("3 pending suggestions"), Comment(rawValue: three.detail))
+    }
+
+    @Test func theDiscardAlertDefaultsToCancelAndOffersDiscard() throws {
+        #expect(AppControl.discardAlert(pending: 0) == nil)
+        let alert = try #require(AppControl.discardAlert(pending: 2))
+        alert.layout()
+        #expect(alert.buttons.map(\.title) == ["Cancel", "Discard"])
+        #expect(alert.window.defaultButtonCell?.title == "Cancel")
+    }
+
+    // MARK: Restoring suggestions into a new editor
+
+    @Test func pendingSuggestionsAreRestoredIntoANewEditorHoldingTheSameDocument() async throws {
+        let (_, first) = try await Self.loaded()
+        _ = try await first.proposeEdits([
+            try await Self.edit(first, 1, "cat", "dog", note: "prefer dogs"),
+            try await Self.edit(first, 1, "mat", "rug"),
+        ])
+        let saved = await AppControl.pendingSuggestions(in: first)
+        #expect(saved.count == 2)
+
+        let (_, second) = try await Self.loaded()
+        #expect(await AppControl.pendingSuggestionCount(in: second) == 0)
+        #expect(await AppControl.restoreSuggestions(saved, in: second) == 0, "none were lost")
+        let restored = try await second.listSuggestions().suggestions
+        #expect(restored.map(\.status) == ["pending", "pending"])
+        #expect(restored.map(\.find) == saved.map(\.find))
+        #expect(restored.map(\.replace) == saved.map(\.replace))
+        #expect(restored.map(\.note) == saved.map(\.note), "the reasons come back with them")
+        try await Self.userRuns(second, "MU.acceptAllSuggestions()")
+        #expect(try await Self.blockAt(second, 1).markdown.hasPrefix("The dog sat on the rug"))
+    }
+
+    @Test func suggestionsThatNoLongerFitTheDocumentAreCountedAsLost() async throws {
+        let (_, first) = try await Self.loaded()
+        _ = try await first.proposeEdits([try await Self.edit(first, 1, "cat", "dog"), try await Self.edit(first, 1, "mat", "rug")])
+        let saved = await AppControl.pendingSuggestions(in: first)
+
+        let (_, other) = try await Self.loaded("# Title\n\nA different document.")
+        #expect(await AppControl.restoreSuggestions(saved, in: other) == 2)
+        #expect(await AppControl.pendingSuggestionCount(in: other) == 0)
+    }
+
+    @Test func restoringNothingLosesNothing() async throws {
+        let (_, webView) = try await Self.loaded()
+        #expect(await AppControl.restoreSuggestions([], in: webView) == 0)
+        #expect(await AppControl.pendingSuggestions(in: nil).isEmpty)
+    }
+
+    @Test func theRestoreWarningNamesHowManyWereLost() throws {
+        #expect(AppControl.restoreLossWarning(lost: 0, of: 3) == nil)
+        let some = try #require(AppControl.restoreLossWarning(lost: 1, of: 3))
+        #expect(some.detail.contains("1 of 3 pending suggestions"), Comment(rawValue: some.detail))
+    }
 }

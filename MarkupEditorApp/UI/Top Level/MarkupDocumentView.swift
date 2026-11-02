@@ -42,6 +42,8 @@ struct MarkupDocumentView: View {
     // MarkupWKWebView finishes loading -- set by handleToggleSource before flipping
     // sourceShowing (Source -> Document), consumed and cleared in markupDidLoad.
     @State private var pendingBlockIndex: Int? = nil
+    // Pending suggestions saved when a settings change reloads the editor, put back by markupDidLoad.
+    @State private var suggestionsToRestore: [Suggestion] = []
     // Live-tracked UTF-16 code unit offset of SourceView's current cursor position,
     // kept in sync by SourceView itself via its `currentOffset` binding. Read (not
     // consumed/cleared) by handleToggleSource when the user toggles away from source --
@@ -324,11 +326,26 @@ struct MarkupDocumentView: View {
     }
     
     /// Fetch the current web view's HTML and bump configVersion, forcing MarkupEditorView to redraw via .id(configVersion).
+    /// The pending suggestions are kept and put back into the new editor, whose document is the same.
     private func reloadEditorForConfigChange() {
         Task {
+            // With the source view showing, the suggestions were already discarded when it was entered.
+            suggestionsToRestore = sourceShowing ? [] : await AppControl.pendingSuggestions(in: MarkupEditor.selectedWebView)
             currentHtml = await getCurrentContents().html ?? ""
             configVersion += 1
         }
+    }
+
+    /// Puts suggestions saved before an editor reload into the new editor, and says so when some cannot be restored.
+    private func restoreSuggestions(_ saved: [Suggestion], in view: MarkupWKWebView) async {
+        let lost = await AppControl.restoreSuggestions(saved, in: view)
+        await AppControl.shared.refreshPendingSuggestions(in: view)
+        guard let warning = AppControl.restoreLossWarning(lost: lost, of: saved.count) else { return }
+        let alert = NSAlert()
+        alert.messageText = warning.message
+        alert.informativeText = warning.detail
+        alert.alertStyle = .informational
+        alert.runModal()
     }
     
     // MARK: - Menu operations
@@ -447,7 +464,7 @@ struct MarkupDocumentView: View {
     /// restore entirely for HTML documents rather than risk that.
     private func handleToggleSource() async {
         if !sourceShowing {
-            guard await confirmDiscardingSuggestions() else { return }
+            guard await confirmDiscardingSuggestions(AppControl.sourceSwitchAlert) else { return }
             // Document -> Source. Capture the ProseMirror selection's top-level block
             // index BEFORE setDocumentSourceFromView() -- the webView's live doc is still
             // the one the selection was captured against. Convert to a UTF-16 offset
@@ -562,17 +579,21 @@ struct MarkupDocumentView: View {
         markupImageToAdd(selectedWebView, url: url)
     }
     
-    /// Asks before the source view replaces an editor that holds pending suggestions, since the editor created when
-    /// returning to the document does not have them. Returns true to proceed.
-    private func confirmDiscardingSuggestions() async -> Bool {
+    /// Asks before an editor that holds pending suggestions is replaced, since the editor that follows does not have
+    /// them. `alertFor` makes the alert from the pending count. Returns true to proceed.
+    private func confirmDiscardingSuggestions(_ alertFor: (Int) -> NSAlert?) async -> Bool {
         let pending = await AppControl.pendingSuggestionCount(in: MarkupEditor.selectedWebView)
-        guard let alert = AppControl.sourceSwitchAlert(pending: pending) else { return true }
+        guard let alert = alertFor(pending) else { return true }
         return alert.runModal() == .alertSecondButtonReturn
     }
 
-    /// Present a save/discard/cancel alert if the document has unsaved changes.
-    /// Returns true to proceed, false if the user cancelled.
+    /// Ask before the document is closed or replaced: whether to discard pending suggestions, and a
+    /// save/discard/cancel alert if the document has unsaved changes. Returns true to proceed, false if the user cancelled.
     private func checkSave() async -> Bool {
+        // With the source view showing, the editor and its suggestions are already gone.
+        if !sourceShowing {
+            guard await confirmDiscardingSuggestions(AppControl.discardAlert) else { return false }
+        }
         guard document.hasChanges else { return true }
         let alert = NSAlert()
         alert.messageText = "Do you want to save the changes to this document?"
@@ -1007,6 +1028,11 @@ extension MarkupDocumentView: MarkupDelegate {
         // document that is already loaded, so its source map is recorded here.
         if pendingURL == nil && !showWelcomeDocument {
             Task { await rebase(on: view) }
+            if !suggestionsToRestore.isEmpty {
+                let saved = suggestionsToRestore
+                suggestionsToRestore = []
+                Task { await restoreSuggestions(saved, in: view) }
+            }
         }
         if let url = pendingURL {
             // A freshly-opened document invalidates any stale restore target left over
